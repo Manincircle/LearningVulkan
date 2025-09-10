@@ -130,6 +130,8 @@ void Test::InitVulkan() {
    CreateDescriptorPool();
    CreateDescriptorSets();
    CreateGraphicsPipeline();
+   InitParticles();
+   CreateComputePipeline();
    CreateVertexBuffer();
    CreateIndexBuffer();
    CreateCommandBuffers();
@@ -398,8 +400,8 @@ void Test::CreateGraphicsPipeline(){
 
     VkPipelineShaderStageCreateInfo ShaderStageInfos[] = {vertStageInfo,fragStageInfo};
 
-    auto bindingDescription = VertexInfo::GetBindingDescription();
-    auto attributeDescriptions = VertexInfo::GetAttributeDescriptions();
+    auto bindingDescription = Particle::GetBindingDescription();
+    auto attributeDescriptions = Particle::getAttributeDescriptions();
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -410,7 +412,7 @@ void Test::CreateGraphicsPipeline(){
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
     VkPipelineViewportStateCreateInfo viewportState{};
@@ -511,12 +513,21 @@ void Test::CreateGraphicsPipeline(){
 
 void Test::CreateCommandBuffers(){
     _commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    _computeCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.commandPool = _commandPool;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = (uint32_t)_commandBuffers.size();
     if (vkAllocateCommandBuffers(_logicDevice, &allocInfo, _commandBuffers.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate command buffers!");
+    }
+    VkCommandBufferAllocateInfo allocInfoCompute{};
+    allocInfoCompute.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfoCompute.commandPool = _commandPool;
+    allocInfoCompute.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfoCompute.commandBufferCount = (uint32_t)_computeCommandBuffers.size();
+    if (vkAllocateCommandBuffers(_logicDevice, &allocInfoCompute, _computeCommandBuffers.data()) != VK_SUCCESS) {
         throw std::runtime_error("Failed to allocate command buffers!");
     }
     std::cout << "[SUCCESS] Command buffers created" << std::endl;
@@ -538,6 +549,7 @@ void Test::CreateSyncObjects(){
     _renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
     _inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
     _computeFinishedFences.resize(MAX_FRAMES_IN_FLIGHT);
+    _computeFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
 
     VkSemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -550,7 +562,8 @@ void Test::CreateSyncObjects(){
         if (vkCreateSemaphore(_logicDevice, &semaphoreInfo, nullptr, &_imageAvailableSemaphores[i]) != VK_SUCCESS ||
             vkCreateSemaphore(_logicDevice, &semaphoreInfo, nullptr, &_renderFinishedSemaphores[i]) != VK_SUCCESS ||
             vkCreateFence(_logicDevice, &fenceInfo, nullptr, &_inFlightFences[i]) != VK_SUCCESS ||
-            vkCreateFence(_logicDevice, &fenceInfo, nullptr, &_computeFinishedFences[i]) != VK_SUCCESS) {
+            vkCreateFence(_logicDevice, &fenceInfo, nullptr, &_computeFinishedFences[i]) != VK_SUCCESS ||
+            vkCreateSemaphore(_logicDevice, &semaphoreInfo, nullptr, &_computeFinishedSemaphores[i]) != VK_SUCCESS) {
             throw std::runtime_error("failed to create synchronization objects for a frame!");
         }
     }
@@ -648,7 +661,7 @@ void Test::InitParticles(){
         particle.position = glm::vec3(x, y, z);
 
     // 初始速度 = 归一化方向 * 很小的速度系数
-        particle.velocity = glm::normalize(glm::vec3(x, y, z)) * 0.00025f;
+        particle.velocity = glm::normalize(glm::vec3(x, y, z)) * 0.25f;
 
     // 随机颜色
         particle.color = glm::vec4(rndDist(rndEngine),rndDist(rndEngine),rndDist(rndEngine),1.0f);
@@ -798,6 +811,7 @@ void Test::CreateComputePipeline(){
     if (vkCreateComputePipelines(_logicDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_computePipeline) != VK_SUCCESS) {
         throw std::runtime_error("failed to create compute pipeline!");
     }
+    vkDestroyShaderModule(_logicDevice, computeShaderModule, nullptr);
 }
 
 void Test::RecordComputeCommandBuffer(VkCommandBuffer computeBuffer){
@@ -812,8 +826,18 @@ void Test::CleanupCompute(){
     vkDestroyDescriptorSetLayout(_logicDevice, _computeDescriptorSetLayout, nullptr);
     vkDestroyDescriptorPool(_logicDevice, _computeDescriptorPool, nullptr);
     vkDestroyPipeline(_logicDevice, _computePipeline, nullptr);
+    vkDestroyPipelineLayout(_logicDevice, _computePipelineLayout, nullptr);
     for(auto& buffer: _computeBuffers){
         vkDestroyBuffer(_logicDevice, buffer, nullptr);
+    }
+    for(auto& commandBuffer: _computeCommandBuffers){
+        vkFreeCommandBuffers(_logicDevice, _commandPool, 1, &commandBuffer);
+    }
+    for(auto& fence: _computeFinishedFences){
+        vkDestroyFence(_logicDevice, fence, nullptr);
+    }
+    for(auto& semaphore: _computeFinishedSemaphores){
+        vkDestroySemaphore(_logicDevice, semaphore, nullptr);
     }
     for(auto& memory: _computeBuffersMemorys){
         vkFreeMemory(_logicDevice, memory, nullptr);
@@ -1593,6 +1617,7 @@ void Test::CleanupVulkan(){
         vkDestroyBuffer(_logicDevice, _uniformBuffers[i], nullptr);
         vkFreeMemory(_logicDevice, _uniformBuffersMemory[i], nullptr);
     }
+    CleanupCompute();
     vkDestroyImageView(_logicDevice, _textureImageView, nullptr);
     vkDestroySampler(_logicDevice, _textureSampler, nullptr);
     vkDestroyImage(_logicDevice, _textureImage, nullptr);
@@ -1876,9 +1901,8 @@ void Test::RecordCommandBuffer(VkCommandBuffer commandBuffer,uint32_t imageIndex
     VkBuffer vertexBuffers[] = {_vertexBuffer};
     VkDeviceSize offsets[] = {0};
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipelineLayout, 0, 1, &_descriptorSets[currentFrame], 0, nullptr);
-    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(commandBuffer, _indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(_indices.size()), 1, 0, 0, 0);
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &_computeBuffers[currentFrame], offsets);
+    vkCmdDraw(commandBuffer, PARTICLE_COUNT, 1, 0, 0);
     vkCmdEndRendering(commandBuffer);
     EndCommandBuffer(commandBuffer);
 }
@@ -1971,7 +1995,84 @@ void Test::DrawFrame(){
 }
 
 void Test::DrawCompute(){
+    // Compute submission
+    vkWaitForFences(_logicDevice, 1, &_computeFinishedFences[currentFrame], VK_TRUE, UINT64_MAX);
+    
+    UpdateUniformBuffer(currentFrame);
 
+    vkResetFences(_logicDevice, 1, &_computeFinishedFences[currentFrame]);
+
+    vkResetCommandBuffer(_computeCommandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
+    RecordComputeCommandBuffer(_computeCommandBuffers[currentFrame]);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &_computeCommandBuffers[currentFrame];
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = &_computeFinishedSemaphores[currentFrame];
+
+    if (vkQueueSubmit(_computeQueue, 1, &submitInfo, _computeFinishedFences[currentFrame]) != VK_SUCCESS) {
+        throw std::runtime_error("failed to submit compute command buffer!");
+    };
+
+    // Graphics submission
+    vkWaitForFences(_logicDevice, 1, &_inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+
+
+    uint32_t imageIndex;
+    VkResult result = vkAcquireNextImageKHR(_logicDevice, _swapChain, std::numeric_limits<uint64_t>::max(), _imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+    if(result==VK_ERROR_OUT_OF_DATE_KHR||framebufferResized){
+        framebufferResized = false;
+        RecreateSwapChain();
+        return;
+    }
+    else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        throw std::runtime_error("failed to acquire swap chain image!");
+    }
+    vkResetFences(_logicDevice, 1, &_inFlightFences[currentFrame]);
+    vkResetCommandBuffer(_commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
+    TransitionImageLayout(_swapChainImages[imageIndex],_swapChainImageFMT,1,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    RecordCommandBuffer(_commandBuffers[currentFrame], imageIndex);
+    TransitionImageLayout(_swapChainImages[imageIndex],_swapChainImageFMT,1,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+
+    VkSemaphore signalSemaphores[] = {_renderFinishedSemaphores[currentFrame]};
+    VkSemaphore waitSemaphores[] = { _computeFinishedSemaphores[currentFrame], _imageAvailableSemaphores[currentFrame] };
+    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+    submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    submitInfo.waitSemaphoreCount = 2;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &_commandBuffers[currentFrame];
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = &_renderFinishedSemaphores[currentFrame];
+
+    if (vkQueueSubmit(_graphicsQueue, 1, &submitInfo, _inFlightFences[currentFrame]) != VK_SUCCESS) {
+        throw std::runtime_error("failed to submit draw command buffer!");
+    }
+
+    VkSwapchainKHR swapChains[] = {_swapChain};
+    
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = signalSemaphores;
+    presentInfo.pSwapchains = swapChains;
+    presentInfo.pImageIndices = &imageIndex;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pResults = nullptr;
+    VkResult presentResult = vkQueuePresentKHR(_presentQueue, &presentInfo);
+    if(presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR){
+        RecreateSwapChain();
+    }
+    else if(presentResult != VK_SUCCESS){
+        throw std::runtime_error("Failed to present swap chain image!");
+    }
+    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void Test::Run(){
@@ -1980,7 +2081,7 @@ void Test::Run(){
     auto startTime = std::chrono::high_resolution_clock::now();
     while (!glfwWindowShouldClose(_window)) {
         glfwPollEvents();
-        DrawFrame();
+        DrawCompute();
         frameCount++;
     }
     auto endTime = std::chrono::high_resolution_clock::now();
