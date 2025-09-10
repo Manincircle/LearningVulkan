@@ -12,6 +12,7 @@
 #include <chrono>
 #define GLM_ENABLE_EXPERIMENTAL
 #include "glm/gtx/hash.hpp"
+#define PARTICLE_COUNT 2048
 
 #ifndef NDEBUG
     const bool enabledValidationLayer = true;
@@ -85,6 +86,12 @@ struct VertexInfo
     }
 };
 
+struct Particle{
+    glm::vec3 position;
+    glm::vec3 velocity;
+    glm::vec4 color;
+};
+
 namespace std {
     template<>
     struct hash<VertexInfo> {
@@ -150,11 +157,15 @@ private:
     void CreateTextureSampler();
     void CreateDepthResources();
     void CreateColorResources();
+    void CreateComputeBuffer();
+    void CreateComputePipeline();
+    void InitParticles();
 
     void CleanupAll();
     void CleanupWindow();
     void CleanupVulkan();
     void CleanupSwapChain();
+    void CleanupCompute();
     void DestroyDebugMessenger();
 
     void RecreateSwapChain();
@@ -174,7 +185,9 @@ private:
     void BeginCommandBuffer(VkCommandBuffer commandBuffer, VkCommandBufferUsageFlags flags);
     void EndCommandBuffer(VkCommandBuffer commandBuffer);
     void RecordCommandBuffer(VkCommandBuffer commandBuffer,uint32_t imageIndex);
+    void RecordComputeCommandBuffer(VkCommandBuffer commandBuffer);
     void DrawFrame();
+    void DrawCompute();
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
     uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
@@ -206,6 +219,7 @@ private:
     VkDebugUtilsMessengerEXT _debugMessenger;
     VkQueue _graphicsQueue;
     VkQueue _presentQueue;
+    VkQueue _computeQueue;
     VkSwapchainKHR _swapChain;
     VkFormat _swapChainImageFMT;
     VkExtent2D _swapChainImageExtent;
@@ -220,6 +234,7 @@ private:
     std::vector<VkSemaphore> _imageAvailableSemaphores;
     std::vector<VkSemaphore> _renderFinishedSemaphores;
     std::vector<VkFence> _inFlightFences;
+    std::vector<VkFence> _computeFinishedFences;
     uint32_t currentFrame = 0;
     VkBuffer _vertexBuffer;
     VkDeviceMemory _vertexBufferMemory;
@@ -242,6 +257,15 @@ private:
     VkImage _colorImage;
     VkDeviceMemory _colorImageMemory;
     VkImageView _colorImageView;
+    std::vector<VkBuffer> _computeBuffers;
+    std::vector<VkDeviceMemory> _computeBuffersMemorys;
+    VkPipeline _computePipeline;
+    VkPipelineLayout _computePipelineLayout;
+    VkDescriptorSetLayout _computeDescriptorSetLayout;
+    VkDescriptorPool _computeDescriptorPool;
+    std::vector<VkDescriptorSet> _computeDescriptorSets;
+    std::chrono::high_resolution_clock::time_point _lastFrameTime;
+    float _deltaTime = 0.0f;
 public:
     bool framebufferResized = false;
     

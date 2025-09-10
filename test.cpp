@@ -14,7 +14,7 @@
 #include "stb_image.h"
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
-
+#include <random>
 
 // Helper function to check extension support
 bool checkExtensionSupport(const std::vector<VkExtensionProperties>& availableExtensions, const char* extensionName) {
@@ -537,6 +537,7 @@ void Test::CreateSyncObjects(){
     _imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
     _renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
     _inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+    _computeFinishedFences.resize(MAX_FRAMES_IN_FLIGHT);
 
     VkSemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -548,8 +549,8 @@ void Test::CreateSyncObjects(){
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         if (vkCreateSemaphore(_logicDevice, &semaphoreInfo, nullptr, &_imageAvailableSemaphores[i]) != VK_SUCCESS ||
             vkCreateSemaphore(_logicDevice, &semaphoreInfo, nullptr, &_renderFinishedSemaphores[i]) != VK_SUCCESS ||
-            vkCreateFence(_logicDevice, &fenceInfo, nullptr, &_inFlightFences[i]) != VK_SUCCESS) {
-
+            vkCreateFence(_logicDevice, &fenceInfo, nullptr, &_inFlightFences[i]) != VK_SUCCESS ||
+            vkCreateFence(_logicDevice, &fenceInfo, nullptr, &_computeFinishedFences[i]) != VK_SUCCESS) {
             throw std::runtime_error("failed to create synchronization objects for a frame!");
         }
     }
@@ -615,6 +616,210 @@ void Test::PickupPhysicalDevice(){
     std::cout << "[SUCCESS] Physical device enumeration completed" << std::endl;
 }
 
+void Test::CreateComputeBuffer(){
+    _computeBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    _computeBuffersMemorys.resize(MAX_FRAMES_IN_FLIGHT);
+    VkDeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
+    {
+        CreateBuffer(bufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT|VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, _computeBuffers[i], _computeBuffersMemorys[i]);
+    }
+}
+
+void Test::InitParticles(){
+    CreateComputeBuffer();
+    std::default_random_engine rndEngine((unsigned)time(nullptr));
+    std::uniform_real_distribution<float> rndDist(0.0f, 1.0f);
+
+    std::vector<Particle> particles(PARTICLE_COUNT);
+
+    for (auto& particle : particles) {
+        float r = 0.25f * cbrt(rndDist(rndEngine));
+
+    // 随机角度
+        float theta = rndDist(rndEngine) * 2.0f * M_PI; // 方位角
+        float phi   = acos(1.0f - 2.0f * rndDist(rndEngine)); // 极角
+
+    // 三维坐标 (球坐标转笛卡尔)
+        float x = r * sin(phi) * cos(theta);
+        float y = r * sin(phi) * sin(theta);
+        float z = r * cos(phi);
+
+        particle.position = glm::vec3(x, y, z);
+
+    // 初始速度 = 归一化方向 * 很小的速度系数
+        particle.velocity = glm::normalize(glm::vec3(x, y, z)) * 0.00025f;
+
+    // 随机颜色
+        particle.color = glm::vec4(rndDist(rndEngine),rndDist(rndEngine),rndDist(rndEngine),1.0f);
+    }
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    VkDeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
+    CreateBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+    void* data;
+    vkMapMemory(_logicDevice, stagingBufferMemory, 0, bufferSize, 0, &data);
+    memcpy(data, particles.data(), (size_t)bufferSize);
+    vkUnmapMemory(_logicDevice, stagingBufferMemory);
+    for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++){
+        CopyBuffer(stagingBuffer, _computeBuffers[i], bufferSize);
+    }
+    vkDestroyBuffer(_logicDevice, stagingBuffer, nullptr);
+    vkFreeMemory(_logicDevice, stagingBufferMemory, nullptr);
+    std::cout << "[SUCCESS] Particles initialized" << std::endl;
+}
+
+void Test::CreateComputePipeline(){
+    std::array<VkDescriptorSetLayoutBinding, 3> layoutBindings{};
+    layoutBindings[0].binding = 0;
+    layoutBindings[0].descriptorCount = 1;
+    layoutBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    layoutBindings[0].pImmutableSamplers = nullptr;
+    layoutBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    layoutBindings[1].binding = 1;
+    layoutBindings[1].descriptorCount = 1;
+    layoutBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    layoutBindings[1].pImmutableSamplers = nullptr;
+    layoutBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    layoutBindings[2].binding = 2;
+    layoutBindings[2].descriptorCount = 1;
+    layoutBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    layoutBindings[2].pImmutableSamplers = nullptr;
+    layoutBindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 3;
+    layoutInfo.pBindings = layoutBindings.data();
+
+    if (vkCreateDescriptorSetLayout(_logicDevice, &layoutInfo, nullptr, &_computeDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create compute descriptor set layout!");
+    }
+    VkDescriptorPoolSize poolSizes[] = {
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * 2) } // 输入输出
+    };
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 2;
+    poolInfo.pPoolSizes = poolSizes;
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
+
+    if (vkCreateDescriptorPool(_logicDevice, &poolInfo, nullptr, &_computeDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create descriptor pool!");
+    }
+
+    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, _computeDescriptorSetLayout);
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = _computeDescriptorPool;
+    allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    allocInfo.pSetLayouts = layouts.data();
+
+    _computeDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    if (vkAllocateDescriptorSets(_logicDevice, &allocInfo, _computeDescriptorSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate compute descriptor sets!");
+    }
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkDescriptorBufferInfo uniformBufferInfo{};
+        uniformBufferInfo.buffer = _uniformBuffers[i];
+        uniformBufferInfo.offset = 0;
+        uniformBufferInfo.range = sizeof(float);
+
+        std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
+
+        VkDescriptorBufferInfo storageBufferInfoLastFrame{};
+        storageBufferInfoLastFrame.buffer = _computeBuffers[(i - 1 + MAX_FRAMES_IN_FLIGHT) % MAX_FRAMES_IN_FLIGHT];
+        storageBufferInfoLastFrame.offset = 0;
+        storageBufferInfoLastFrame.range = sizeof(Particle) * PARTICLE_COUNT;
+
+        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[0].dstSet = _computeDescriptorSets[i];
+        descriptorWrites[0].dstBinding = 0;
+        descriptorWrites[0].dstArrayElement = 0;
+        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrites[0].descriptorCount = 1;
+        descriptorWrites[0].pBufferInfo = &uniformBufferInfo;
+
+
+        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[1].dstSet = _computeDescriptorSets[i];
+        descriptorWrites[1].dstBinding = 1;
+        descriptorWrites[1].dstArrayElement = 0;
+        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorWrites[1].descriptorCount = 1;
+        descriptorWrites[1].pBufferInfo = &storageBufferInfoLastFrame;
+
+        VkDescriptorBufferInfo storageBufferInfoCurrentFrame{};
+        storageBufferInfoCurrentFrame.buffer = _computeBuffers[i];
+        storageBufferInfoCurrentFrame.offset = 0;
+        storageBufferInfoCurrentFrame.range = sizeof(Particle) * PARTICLE_COUNT;
+
+        descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[2].dstSet = _computeDescriptorSets[i];
+        descriptorWrites[2].dstBinding = 2;
+        descriptorWrites[2].dstArrayElement = 0;
+        descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorWrites[2].descriptorCount = 1;
+        descriptorWrites[2].pBufferInfo = &storageBufferInfoCurrentFrame;
+
+        vkUpdateDescriptorSets(_logicDevice, 3, descriptorWrites.data(), 0, nullptr);
+    }
+
+    auto computeShaderCode = ReadFile("compute.spv");
+
+    VkShaderModule computeShaderModule = CreateShaderModule(computeShaderCode);
+
+    VkPipelineShaderStageCreateInfo computeShaderStageInfo{};
+    computeShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    computeShaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    computeShaderStageInfo.module = computeShaderModule;
+    computeShaderStageInfo.pName = "CSMain";
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &_computeDescriptorSetLayout;
+
+    if (vkCreatePipelineLayout(_logicDevice, &pipelineLayoutInfo, nullptr, &_computePipelineLayout) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create compute pipeline layout!");
+    }
+
+    VkComputePipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.layout = _computePipelineLayout;
+    pipelineInfo.stage = computeShaderStageInfo;
+
+    if (vkCreateComputePipelines(_logicDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_computePipeline) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create compute pipeline!");
+    }
+}
+
+void Test::RecordComputeCommandBuffer(VkCommandBuffer computeBuffer){
+    BeginCommandBuffer(computeBuffer,0);
+    vkCmdBindPipeline(computeBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _computePipeline);
+    vkCmdBindDescriptorSets(computeBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _computePipelineLayout, 0, 1, &_computeDescriptorSets[currentFrame], 0, nullptr);
+    vkCmdDispatch(computeBuffer, PARTICLE_COUNT / 64 + 1, 1, 1);
+    EndCommandBuffer(computeBuffer);
+}
+
+void Test::CleanupCompute(){
+    vkDestroyDescriptorSetLayout(_logicDevice, _computeDescriptorSetLayout, nullptr);
+    vkDestroyDescriptorPool(_logicDevice, _computeDescriptorPool, nullptr);
+    vkDestroyPipeline(_logicDevice, _computePipeline, nullptr);
+    for(auto& buffer: _computeBuffers){
+        vkDestroyBuffer(_logicDevice, buffer, nullptr);
+    }
+    for(auto& memory: _computeBuffersMemorys){
+        vkFreeMemory(_logicDevice, memory, nullptr);
+    }
+}
+
 void Test::CreateLogicDevice(){
     std::set<uint32_t> indices = {_queueFamily.graphicsQueueFamily.value(),_queueFamily.presentQueueFamily.value()};
     float queuePriority = 1.0f;
@@ -645,6 +850,7 @@ void Test::CreateLogicDevice(){
         throw std::runtime_error("Failed to create logic device");
     }
     vkGetDeviceQueue(_logicDevice, _queueFamily.graphicsQueueFamily.value(), 0, &_graphicsQueue);
+    vkGetDeviceQueue(_logicDevice, _queueFamily.presentQueueFamily.value(), 0, &_computeQueue);
     vkGetDeviceQueue(_logicDevice, _queueFamily.presentQueueFamily.value(), 0, &_presentQueue);
     std::cout << "[SUCCESS] Logic device created" << std::endl;
     std::cout << "[SUCCESS] Graphics queue retrieved" << std::endl;
@@ -1244,17 +1450,10 @@ VkSampleCountFlagBits Test::GetMaxUsableSampleCount(){
 }
 
 void Test::UpdateUniformBuffer(uint32_t currentImage){
-    UniformBufferObject ubo{};
-    float time = 0.f;
-    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-
-    ubo.view = glm::lookAt(glm::vec3(1,1,1), glm::vec3(0,1,0), glm::vec3(0,1,0));
-
-    ubo.proj = glm::perspective(glm::radians(45.0f),
-                            _swapChainImageExtent.width / (float)_swapChainImageExtent.height,
-                            0.1f, 10.0f);
-    ubo.proj[1][1] *= -1; // Vulkan NDC
-
+    auto now = std::chrono::high_resolution_clock::now();
+    _deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(now - _lastFrameTime).count();
+    _lastFrameTime = now;
+    float ubo = _deltaTime;
     memcpy(_uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
@@ -1363,7 +1562,7 @@ QueueFamily Test::FindQueueFamilyIndex(VkPhysicalDevice device){
     std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
     for(uint32_t i=0;i<queueFamilyCount;i++){
-        if(queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT){
+        if(queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT&&queueFamilies[i].queueFlags&VK_QUEUE_COMPUTE_BIT){
             queueFamily.graphicsQueueFamily = i;
         }
         VkBool32 presentSupport = false;
@@ -1769,6 +1968,10 @@ void Test::DrawFrame(){
         throw std::runtime_error("Failed to present swap chain image!");
     }
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+void Test::DrawCompute(){
+
 }
 
 void Test::Run(){
