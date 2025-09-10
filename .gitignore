@@ -1,0 +1,7 @@
+.vscode/
+.cache/
+build/
+glfw/
+glm/
+stb_image.h
+tiny_obj_loader.h

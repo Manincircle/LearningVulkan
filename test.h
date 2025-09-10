@@ -244,4 +244,5 @@ private:
     VkImageView _colorImageView;
 public:
     bool framebufferResized = false;
+    
 };
