@@ -8,7 +8,25 @@ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0 -Wall -Wextra")
 add_library(cxx_std INTERFACE)
 target_compile_features(cxx_std INTERFACE cxx_std_20)
 
-add_executable(VulkanTest main.cpp VulkanContext.cpp Buffer.cpp Image.cpp)
+set(SOURCES
+    main.cpp 
+
+    VulkanContext.cpp
+    VulkanQueue.cpp
+    
+    VulkanSwapChain.cpp
+    VulkanPipeline.cpp
+    Renderer.cpp
+    ImmediateSubmitter.cpp
+    Model.cpp
+    VulkanImage.cpp
+    VulkanBuffer.cpp
+    VulkanDescriptorSetLayout.cpp
+    VulkanDescriptorPool.cpp
+    DescriptorWriter.cpp
+)
+
+add_executable(VulkanTest ${SOURCES})
 target_include_directories(VulkanTest PUBLIC "glfw/include")
 target_link_directories(VulkanTest PUBLIC "glfw/lib")
 
