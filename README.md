@@ -1,1 +1,3 @@
 # LearningVulkan
+最新代码在master分支
+和AI配合把Vulkan的一些组件组合成类了
