@@ -54,7 +54,7 @@ VkDescriptorSet VulkanDescriptorPool::allocateSet(const VulkanDescriptorSetLayou
 
     VkDescriptorSet descriptorSet;
     if (vkAllocateDescriptorSets(_context.getDevice(), &allocInfo, &descriptorSet) != VK_SUCCESS) {
-        // 可以添加一个 tryAllocate 函数来处理分配失败的情况（例如池已满）
+        // 可以添加一�?tryAllocate 函数来处理分配失败的情况（例如池已满�?
         throw std::runtime_error("failed to allocate descriptor set!");
     }
     return descriptorSet;

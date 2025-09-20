@@ -103,8 +103,17 @@ int main()
     std::unique_ptr<VulkanImage> emissiveImage = VulkanImage::createTexture(context, immediateSubmitter, "res\\emissive.png",false);
     std::unique_ptr<VulkanImage> msaImage = VulkanImage::createTexture(context, immediateSubmitter, "res\\msa.png", false);
 
-	std::unique_ptr<VulkanImage> SkyBox = VulkanImage::createCubemap(context, immediateSubmitter, "res\\BuleSky");
+    std::map<std::string, std::unique_ptr<VulkanImage>> skyboxCubemaps;
+    skyboxCubemaps["Purple Sky"] = VulkanImage::createCubemap(context, immediateSubmitter, "res\\PurpleSky");
+    skyboxCubemaps["Blue Sky"] = VulkanImage::createCubemap(context, immediateSubmitter, "res\\BuleSky");
+    skyboxCubemaps["Building Sky"] = VulkanImage::createCubemap(context, immediateSubmitter, "res\\BuildSky");
+    skyboxCubemaps["Red Sky"] = VulkanImage::createCubemap(context, immediateSubmitter, "res\\RedSky");
+    VulkanImage* currentSkybox = skyboxCubemaps.begin()->second.get();
+
+    std::cout << "All SkyBoxes Built!" << std::endl;
+
 	std::cout << "SkyBox Build!"<< std::endl;
+
     VulkanBuffer vertexBuffer(
         context, model.getVertices().size() * sizeof(Vertex), 
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
@@ -258,13 +267,6 @@ int main()
     std::vector<VkDescriptorSet> skyDescriptorSets(renderer.getMaxFramesInFlight());
     for (int i = 0; i < renderer.getMaxFramesInFlight(); ++i) {
         skyDescriptorSets[i] = skyDescriptorPool->allocateSet(*skyDescriptorSetLayout);
-
-        VkDescriptorBufferInfo bufferInfo = skyUniformBuffers[i]->getDescriptorInfo();
-        VkDescriptorImageInfo imageInfo = SkyBox->getDescriptorInfo();
-        DescriptorWriter(context, skyDescriptorSets[i])
-            .writeBuffer(0, &bufferInfo)
-			.writeImage(1, &imageInfo)
-            .update();
     }
 
     skyPipelineBuilder.addDescriptorSetLayout(skyDescriptorSetLayout->getLayout());
@@ -378,6 +380,18 @@ int main()
             ImGui::DragFloat("Intensity##Light", &lightParams.intensity, 0.1f, 0.0f, 1000.0f);
             ImGui::DragFloat3("Direction##Light", &lightParams.direction.x, 0.01f, -1.0f, 1.0f);
         }
+
+        if (ImGui::CollapsingHeader("Skybox Selection")) {
+            // 遍历我们 map 中的所有天空盒
+            for (auto const& [name, skybox_ptr] : skyboxCubemaps) {
+                // ImGui::RadioButton 会创建一个单选按钮
+                // 如果当前选择的是这个天空盒，按钮会被选中
+                if (ImGui::RadioButton(name.c_str(), currentSkybox == skybox_ptr.get())) {
+                    // 如果用户点击了这个按钮，就更新当前选择
+                    currentSkybox = skybox_ptr.get();
+                }
+            }
+        }
         ImGui::End();
 
         // 3. 准备 ImGui 的绘图数据
@@ -395,6 +409,15 @@ int main()
             cameraTransform,
             lightParams
         );
+
+        VkDescriptorBufferInfo skyBufferInfo = skyUniformBuffers[renderer.getCurrentFrame()]->getDescriptorInfo();
+        VkDescriptorImageInfo skyImageInfo = currentSkybox->getDescriptorInfo(); // <-- 使用当前选择的天空盒
+
+        DescriptorWriter(context, skyDescriptorSets[renderer.getCurrentFrame()])
+            .writeBuffer(0, &skyBufferInfo)
+            .writeImage(1, &skyImageInfo)
+            .update();
+
         renderer.beginRenderPass(commandBuffer, swapchain);
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline->getPipeline());
